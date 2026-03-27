@@ -1,19 +1,13 @@
 """
-Mock data generator for HD Customer Segmentation simulation.
+Mock data generator V2 — sharper archetype separation.
 
-Generates realistic Home Depot-scale customer data with embedded behavioral
-archetypes that demographic segments can't capture but behavioral clustering will.
-
-Customer archetypes (hidden — these are what K-Means should discover):
-  1. Weekend Warriors  — high frequency, broad category, in-store, moderate spend
-  2. Project Planners  — seasonal bursts, high basket, online research + in-store buy
-  3. Price Hunters     — promo-driven, coupon-heavy, narrow categories
-  4. Loyal Regulars    — steady mid-frequency, full-price, consistent patterns
-  5. Dormant/At-Risk   — declining frequency, increasing recency, fading engagement
-
-Old segments are purely demographic (age + region) and intentionally cross-cut
-the behavioral archetypes — a "Young Urban" segment contains Weekend Warriors,
-Price Hunters, AND Dormant customers in roughly equal measure.
+Key changes from V1:
+- More distinct purchase frequency ranges between archetypes
+- Sharper price sensitivity differences
+- Clearer channel preference separation
+- More pronounced seasonal patterns for Project Planners
+- Stronger decline signal for Dormant customers
+- Basket size distributions less overlapping
 """
 
 import numpy as np
@@ -33,7 +27,9 @@ CATEGORIES = [
     "Flooring", "Kitchen & Bath", "Lighting"
 ]
 
-CHANNELS = ["in_store", "online"]
+PROJECT_CATEGORIES = ["Lumber", "Flooring", "Kitchen & Bath", "Plumbing", "Appliances"]
+MAINTENANCE_CATEGORIES = ["Hardware", "Paint", "Lighting", "Electrical", "Garden & Outdoor"]
+
 CAMPAIGN_CHANNELS = ["email", "push", "sms"]
 DEVICES = ["desktop", "mobile", "tablet"]
 PAGE_TYPES = ["home", "category", "product", "search", "cart", "checkout"]
@@ -49,22 +45,22 @@ REGIONS = ["Northeast", "Southeast", "Midwest", "Southwest", "West"]
 
 DATE_START = datetime(2023, 6, 1)
 DATE_END = datetime(2025, 2, 28)
-TOTAL_DAYS = (DATE_END - DATE_START).days
 
 
 def _random_dates(start, end, n):
     delta = (end - start).days
+    if delta <= 0:
+        return [start] * n
     random_days = np.random.randint(0, delta, size=n)
     return [start + timedelta(days=int(d)) for d in random_days]
 
 
 def _assign_archetype(n):
-    archetypes = np.random.choice(
+    return np.random.choice(
         [1, 2, 3, 4, 5],
         size=n,
         p=[0.22, 0.18, 0.25, 0.20, 0.15]
     )
-    return archetypes
 
 
 def _assign_old_segment(age_bracket, region):
@@ -89,16 +85,8 @@ def generate_customer_master(n=N_CUSTOMERS):
         "gender": np.random.choice(["M", "F", "Unknown"], size=n, p=[0.52, 0.38, 0.10]),
     })
 
-    signup_dates = _random_dates(
-        datetime(2018, 1, 1),
-        datetime(2024, 6, 1),
-        n
-    )
-    customers["signup_date"] = signup_dates
-
-    archetypes = _assign_archetype(n)
-    customers["_archetype"] = archetypes
-
+    customers["signup_date"] = _random_dates(datetime(2018, 1, 1), datetime(2024, 6, 1), n)
+    customers["_archetype"] = _assign_archetype(n)
     customers["old_segment_id"] = customers.apply(
         lambda r: _assign_old_segment(r["age_bracket"], r["region"]), axis=1
     )
@@ -106,111 +94,146 @@ def generate_customer_master(n=N_CUSTOMERS):
     return customers
 
 
-def generate_transactions(customers, n_target=N_TRANSACTIONS):
+def generate_transactions(customers):
     rows = []
-    archetype_configs = {
-        1: {"freq_range": (15, 40), "basket_low": (30, 80), "basket_high": (100, 400),
-            "high_basket_prob": 0.15, "online_ratio": 0.25, "promo_prob": 0.30,
-            "top_categories": ["Hardware", "Paint", "Garden & Outdoor", "Lumber", "Electrical"],
-            "cat_breadth": (4, 8), "weekend_prob": 0.70},
-        2: {"freq_range": (4, 12), "basket_low": (80, 200), "basket_high": (500, 4500),
-            "high_basket_prob": 0.45, "online_ratio": 0.40, "promo_prob": 0.15,
-            "top_categories": ["Flooring", "Kitchen & Bath", "Lumber", "Appliances", "Plumbing"],
-            "cat_breadth": (2, 5), "weekend_prob": 0.50},
-        3: {"freq_range": (10, 30), "basket_low": (25, 60), "basket_high": (60, 150),
-            "high_basket_prob": 0.08, "online_ratio": 0.35, "promo_prob": 0.75,
-            "top_categories": ["Paint", "Hardware", "Lighting", "Garden & Outdoor"],
-            "cat_breadth": (2, 5), "weekend_prob": 0.45},
-        4: {"freq_range": (8, 22), "basket_low": (40, 120), "basket_high": (120, 500),
-            "high_basket_prob": 0.20, "online_ratio": 0.20, "promo_prob": 0.20,
-            "top_categories": CATEGORIES,
-            "cat_breadth": (3, 7), "weekend_prob": 0.55},
-        5: {"freq_range": (2, 8), "basket_low": (30, 70), "basket_high": (70, 200),
-            "high_basket_prob": 0.10, "online_ratio": 0.30, "promo_prob": 0.35,
-            "top_categories": ["Hardware", "Paint", "Lighting"],
-            "cat_breadth": (1, 3), "weekend_prob": 0.50},
+
+    # Archetype configs with SHARP separation
+    configs = {
+        # Weekend Warriors: HIGH frequency, LOW-MID basket, broad categories, IN-STORE, moderate promo
+        1: {
+            "freq": (25, 50),
+            "basket_base": (30, 90),
+            "basket_high": (90, 250),
+            "high_prob": 0.10,
+            "online_pct": 0.15,
+            "promo_pct": 0.25,
+            "discount_range": (0.05, 0.15),
+            "categories": MAINTENANCE_CATEGORIES + ["Lumber"],
+            "cat_breadth": (5, 8),
+            "weekend_pct": 0.85,
+        },
+        # Project Planners: LOW frequency, HIGH basket, project categories, ONLINE research, seasonal
+        2: {
+            "freq": (5, 12),
+            "basket_base": (200, 600),
+            "basket_high": (800, 4500),
+            "high_prob": 0.40,
+            "online_pct": 0.55,
+            "promo_pct": 0.12,
+            "discount_range": (0.03, 0.10),
+            "categories": PROJECT_CATEGORIES,
+            "cat_breadth": (2, 4),
+            "weekend_pct": 0.45,
+        },
+        # Price Hunters: MID frequency, LOW basket, promo-HEAVY, deep discounts, narrow categories
+        3: {
+            "freq": (15, 35),
+            "basket_base": (25, 55),
+            "basket_high": (55, 120),
+            "high_prob": 0.08,
+            "online_pct": 0.40,
+            "promo_pct": 0.80,
+            "discount_range": (0.15, 0.35),
+            "categories": ["Paint", "Hardware", "Lighting", "Garden & Outdoor"],
+            "cat_breadth": (2, 4),
+            "weekend_pct": 0.40,
+        },
+        # Loyal Regulars: MID frequency, MID basket, FULL PRICE, consistent, in-store
+        4: {
+            "freq": (12, 25),
+            "basket_base": (50, 150),
+            "basket_high": (150, 500),
+            "high_prob": 0.20,
+            "online_pct": 0.18,
+            "promo_pct": 0.10,
+            "discount_range": (0.03, 0.08),
+            "categories": CATEGORIES,
+            "cat_breadth": (4, 8),
+            "weekend_pct": 0.60,
+        },
+        # Dormant/At-Risk: transactions concentrated in EARLY period, then drop off sharply
+        5: {
+            "freq": (8, 18),
+            "basket_base": (30, 80),
+            "basket_high": (80, 200),
+            "high_prob": 0.10,
+            "online_pct": 0.30,
+            "promo_pct": 0.35,
+            "discount_range": (0.05, 0.20),
+            "categories": ["Hardware", "Paint", "Lighting"],
+            "cat_breadth": (1, 3),
+            "weekend_pct": 0.50,
+        },
     }
 
     for _, cust in customers.iterrows():
         arch = cust["_archetype"]
-        cfg = archetype_configs[arch]
+        cfg = configs[arch]
+        cid = cust["customer_id"]
 
-        n_txns = np.random.randint(cfg["freq_range"][0], cfg["freq_range"][1] + 1)
-        cat_count = np.random.randint(cfg["cat_breadth"][0], cfg["cat_breadth"][1] + 1)
-        cust_categories = list(np.random.choice(
-            cfg["top_categories"],
-            size=min(cat_count, len(cfg["top_categories"])),
-            replace=False
-        ))
+        n_txns = np.random.randint(cfg["freq"][0], cfg["freq"][1] + 1)
+        cat_count = np.random.randint(cfg["cat_breadth"][0], min(cfg["cat_breadth"][1] + 1, len(cfg["categories"]) + 1))
+        cust_cats = list(np.random.choice(cfg["categories"], size=min(cat_count, len(cfg["categories"])), replace=False))
 
-        txn_dates = _random_dates(DATE_START, DATE_END, n_txns)
-
+        # Generate transaction dates
         if arch == 2:
-            seasonal_dates = []
-            for d in txn_dates:
-                if np.random.random() < 0.6:
-                    spring_start = datetime(d.year, 3, 15)
-                    spring_end = datetime(d.year, 6, 15)
-                    fall_start = datetime(d.year, 9, 1)
-                    fall_end = datetime(d.year, 11, 15)
+            # Project Planners: clustered in spring and fall
+            txn_dates = []
+            for _ in range(n_txns):
+                year = np.random.choice([2023, 2024, 2025], p=[0.3, 0.5, 0.2])
+                if np.random.random() < 0.70:
                     if np.random.random() < 0.5:
-                        days_in_range = (spring_end - spring_start).days
-                        seasonal_dates.append(spring_start + timedelta(days=np.random.randint(0, days_in_range)))
+                        month = np.random.choice([3, 4, 5, 6])
                     else:
-                        days_in_range = (fall_end - fall_start).days
-                        seasonal_dates.append(fall_start + timedelta(days=np.random.randint(0, days_in_range)))
+                        month = np.random.choice([9, 10, 11])
                 else:
-                    seasonal_dates.append(d)
-            txn_dates = seasonal_dates
+                    month = np.random.randint(1, 13)
+                day = np.random.randint(1, 28)
+                try:
+                    txn_dates.append(datetime(year, month, day))
+                except ValueError:
+                    txn_dates.append(datetime(year, month, 15))
 
-        if arch == 5:
-            txn_dates_sorted = sorted(txn_dates)
-            midpoint = len(txn_dates_sorted) // 2
-            early_dates = txn_dates_sorted[:midpoint]
-            late_count = len(txn_dates_sorted) - midpoint
-            if late_count > 0:
-                late_start = datetime(2024, 8, 1)
-                late_dates = _random_dates(late_start, DATE_END, late_count)
-                late_dates = sorted(late_dates)
-                sparse_late = []
-                for i, d in enumerate(late_dates):
-                    if np.random.random() < 0.4:
-                        sparse_late.append(d)
-                txn_dates = early_dates + sparse_late
-                if len(txn_dates) < 2:
-                    txn_dates = early_dates[:2]
+        elif arch == 5:
+            # Dormant: 80% of transactions in first half of date range, 20% sparse in second half
+            midpoint = DATE_START + (DATE_END - DATE_START) / 2
+            early_count = int(n_txns * 0.80)
+            late_count = n_txns - early_count
+            early_dates = _random_dates(DATE_START, midpoint, early_count)
+            late_dates = _random_dates(midpoint, DATE_END, max(late_count, 1))
+            txn_dates = early_dates + late_dates
 
-        for txn_date in txn_dates:
-            is_high = np.random.random() < cfg["high_basket_prob"]
-            if is_high:
+        else:
+            txn_dates = _random_dates(DATE_START, DATE_END, n_txns)
+
+        # Weekend adjustment
+        adjusted_dates = []
+        for d in txn_dates:
+            if np.random.random() < cfg["weekend_pct"]:
+                days_to_sat = (5 - d.weekday()) % 7
+                if days_to_sat == 0:
+                    days_to_sat = 7 if d.weekday() != 5 else 0
+                d = d + timedelta(days=days_to_sat)
+            adjusted_dates.append(d)
+
+        for txn_date in adjusted_dates:
+            # Basket size
+            if np.random.random() < cfg["high_prob"]:
                 amount = round(np.random.uniform(cfg["basket_high"][0], cfg["basket_high"][1]), 2)
             else:
-                amount = round(np.random.uniform(cfg["basket_low"][0], cfg["basket_low"][1]), 2)
+                amount = round(np.random.uniform(cfg["basket_base"][0], cfg["basket_base"][1]), 2)
 
-            is_promo = np.random.random() < cfg["promo_prob"]
-            is_bf = txn_date.month == 11 and txn_date.day >= 20 and txn_date.day <= 30
-            if is_bf:
-                is_promo = True if np.random.random() < 0.8 else is_promo
-
+            # Promo and discount
+            is_promo = np.random.random() < cfg["promo_pct"]
             discount = 0.0
             if is_promo:
-                if arch == 3:
-                    discount = round(np.random.uniform(0.10, 0.35), 2)
-                else:
-                    discount = round(np.random.uniform(0.05, 0.20), 2)
+                discount = round(np.random.uniform(cfg["discount_range"][0], cfg["discount_range"][1]), 2)
 
-            is_weekend = txn_date.weekday() >= 5
-            if not is_weekend and np.random.random() < cfg["weekend_prob"]:
-                days_to_sat = 5 - txn_date.weekday()
-                if days_to_sat <= 0:
-                    days_to_sat += 7
-                txn_date = txn_date + timedelta(days=days_to_sat)
-
-            channel = "online" if np.random.random() < cfg["online_ratio"] else "in_store"
-            category = np.random.choice(cust_categories)
+            channel = "online" if np.random.random() < cfg["online_pct"] else "in_store"
+            category = np.random.choice(cust_cats)
 
             rows.append({
-                "customer_id": cust["customer_id"],
+                "customer_id": cid,
                 "transaction_date": txn_date.strftime("%Y-%m-%d"),
                 "amount": amount,
                 "category": category,
@@ -223,57 +246,41 @@ def generate_transactions(customers, n_target=N_TRANSACTIONS):
     df["transaction_id"] = [f"TXN_{i:07d}" for i in range(1, len(df) + 1)]
     df = df[["transaction_id", "customer_id", "transaction_date", "amount",
              "category", "channel", "promo_flag", "discount_pct"]]
-
-    if len(df) > n_target * 1.2:
-        df = df.sample(n=n_target, random_state=42).reset_index(drop=True)
-        df["transaction_id"] = [f"TXN_{i:07d}" for i in range(1, len(df) + 1)]
-
     return df
 
 
-def generate_web_events(customers, transactions, n_target=N_WEB_EVENTS):
+def generate_web_events(customers):
     rows = []
-    cust_txn_dates = transactions.groupby("customer_id")["transaction_date"].apply(list).to_dict()
+
+    session_configs = {
+        1: {"sessions": (15, 30), "pages": (2, 4), "search_prob": 0.15, "device_probs": [0.25, 0.60, 0.15]},
+        2: {"sessions": (40, 90), "pages": (5, 12), "search_prob": 0.65, "device_probs": [0.60, 0.30, 0.10]},
+        3: {"sessions": (25, 50), "pages": (3, 7), "search_prob": 0.45, "device_probs": [0.35, 0.55, 0.10]},
+        4: {"sessions": (10, 25), "pages": (2, 4), "search_prob": 0.15, "device_probs": [0.30, 0.50, 0.20]},
+        5: {"sessions": (5, 15), "pages": (1, 3), "search_prob": 0.10, "device_probs": [0.40, 0.45, 0.15]},
+    }
 
     for _, cust in customers.iterrows():
         arch = cust["_archetype"]
+        cfg = session_configs[arch]
         cid = cust["customer_id"]
 
-        if arch == 1:
-            n_sessions = np.random.randint(20, 60)
-            pages_per_session = (2, 6)
-        elif arch == 2:
-            n_sessions = np.random.randint(30, 80)
-            pages_per_session = (4, 12)
-        elif arch == 3:
-            n_sessions = np.random.randint(25, 55)
-            pages_per_session = (3, 8)
-        elif arch == 4:
-            n_sessions = np.random.randint(10, 35)
-            pages_per_session = (2, 5)
-        else:
-            n_sessions = np.random.randint(5, 20)
-            pages_per_session = (1, 4)
-
+        n_sessions = np.random.randint(cfg["sessions"][0], cfg["sessions"][1] + 1)
         session_dates = _random_dates(DATE_START, DATE_END, n_sessions)
 
         for i, sess_date in enumerate(session_dates):
             session_id = f"SESS_{cid}_{i:04d}"
-            n_pages = np.random.randint(pages_per_session[0], pages_per_session[1] + 1)
-            device = np.random.choice(DEVICES, p=[0.45, 0.45, 0.10])
-
-            if arch == 2:
-                device = np.random.choice(DEVICES, p=[0.55, 0.35, 0.10])
-
-            search_flag = 1 if np.random.random() < (0.6 if arch == 2 else 0.3) else 0
+            n_pages = np.random.randint(cfg["pages"][0], cfg["pages"][1] + 1)
+            device = np.random.choice(DEVICES, p=cfg["device_probs"])
+            search_flag = 1 if np.random.random() < cfg["search_prob"] else 0
 
             for page_num in range(n_pages):
-                if page_num == 0:
-                    page_type = np.random.choice(["home", "search", "category"], p=[0.4, 0.3, 0.3])
-                elif page_num == n_pages - 1 and np.random.random() < 0.2:
-                    page_type = "cart"
+                if arch == 2:
+                    page_type = np.random.choice(PAGE_TYPES, p=[0.05, 0.15, 0.45, 0.15, 0.10, 0.10])
+                elif arch == 3:
+                    page_type = np.random.choice(PAGE_TYPES, p=[0.10, 0.30, 0.25, 0.15, 0.15, 0.05])
                 else:
-                    page_type = np.random.choice(PAGE_TYPES, p=[0.10, 0.25, 0.35, 0.10, 0.10, 0.10])
+                    page_type = np.random.choice(PAGE_TYPES, p=[0.15, 0.25, 0.30, 0.10, 0.10, 0.10])
 
                 rows.append({
                     "customer_id": cid,
@@ -285,40 +292,36 @@ def generate_web_events(customers, transactions, n_target=N_WEB_EVENTS):
                 })
 
     df = pd.DataFrame(rows)
-    if len(df) > n_target * 1.2:
-        df = df.sample(n=n_target, random_state=42).reset_index(drop=True)
+    if len(df) > N_WEB_EVENTS * 1.5:
+        df = df.sample(n=N_WEB_EVENTS, random_state=42).reset_index(drop=True)
 
     df["event_id"] = [f"EVT_{i:07d}" for i in range(1, len(df) + 1)]
     df = df[["event_id", "customer_id", "session_id", "event_date",
              "page_type", "device", "search_flag"]]
-
     return df
 
 
 def generate_loyalty(customers):
     rows = []
-    tier_by_archetype = {
-        1: {"Gold": 0.30, "Silver": 0.45, "Bronze": 0.20, "None": 0.05},
-        2: {"Gold": 0.20, "Silver": 0.30, "Bronze": 0.25, "None": 0.25},
-        3: {"Gold": 0.10, "Silver": 0.35, "Bronze": 0.40, "None": 0.15},
-        4: {"Gold": 0.40, "Silver": 0.35, "Bronze": 0.20, "None": 0.05},
-        5: {"Gold": 0.05, "Silver": 0.15, "Bronze": 0.30, "None": 0.50},
+    tier_configs = {
+        1: {"Gold": 0.35, "Silver": 0.40, "Bronze": 0.20, "None": 0.05},
+        2: {"Gold": 0.15, "Silver": 0.25, "Bronze": 0.25, "None": 0.35},
+        3: {"Gold": 0.05, "Silver": 0.25, "Bronze": 0.45, "None": 0.25},
+        4: {"Gold": 0.50, "Silver": 0.30, "Bronze": 0.15, "None": 0.05},
+        5: {"Gold": 0.03, "Silver": 0.10, "Bronze": 0.27, "None": 0.60},
     }
 
     for _, cust in customers.iterrows():
         arch = cust["_archetype"]
-        tiers = tier_by_archetype[arch]
+        tiers = tier_configs[arch]
         tier = np.random.choice(list(tiers.keys()), p=list(tiers.values()))
 
         if tier == "None":
-            points = 0
-            enrollment_date = None
-            last_activity = None
+            points, enrollment_date, last_activity = 0, None, None
         else:
             points_range = {"Gold": (5000, 25000), "Silver": (1000, 5000), "Bronze": (100, 1000)}
             points = np.random.randint(points_range[tier][0], points_range[tier][1])
             enrollment_date = cust["signup_date"] + timedelta(days=np.random.randint(0, 180))
-
             if arch == 5:
                 last_activity = enrollment_date + timedelta(days=np.random.randint(30, 300))
             else:
@@ -342,10 +345,9 @@ def generate_old_segments(customers):
     return df
 
 
-def generate_campaigns(customers, n_target=N_CAMPAIGNS):
+def generate_campaigns(customers):
     rows = []
-    campaign_dates = _random_dates(datetime(2023, 9, 1), datetime(2025, 2, 1), 30)
-    campaign_dates = sorted(campaign_dates)
+    campaign_dates = sorted(_random_dates(datetime(2023, 9, 1), datetime(2025, 2, 1), 30))
 
     campaigns_meta = []
     for i, cd in enumerate(campaign_dates):
@@ -357,9 +359,7 @@ def generate_campaigns(customers, n_target=N_CAMPAIGNS):
         })
 
     for camp in campaigns_meta:
-        segment_ids = [1, 2, 3, 4]
-        targeted_segment = np.random.choice(segment_ids)
-
+        targeted_segment = np.random.choice([1, 2, 3, 4])
         eligible = customers[customers["old_segment_id"] == targeted_segment]
         sample_size = min(len(eligible), np.random.randint(80, 200))
         recipients = eligible.sample(n=sample_size, random_state=hash(camp["campaign_id"]) % 2**31)
@@ -387,12 +387,7 @@ def generate_campaigns(customers, n_target=N_CAMPAIGNS):
                 "revenue": revenue,
             })
 
-    df = pd.DataFrame(rows)
-
-    if len(df) > n_target:
-        df = df.head(n_target)
-
-    return df
+    return pd.DataFrame(rows)
 
 
 def generate_all():
@@ -403,7 +398,7 @@ def generate_all():
     transactions = generate_transactions(customers)
 
     print("Generating web events...")
-    web_events = generate_web_events(customers, transactions)
+    web_events = generate_web_events(customers)
 
     print("Generating loyalty data...")
     loyalty = generate_loyalty(customers)
